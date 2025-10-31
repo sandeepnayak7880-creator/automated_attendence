@@ -1068,6 +1068,37 @@
         <div id="successStudent" style="margin-top: 8px; font-size: 16px; opacity: 0.9;"></div>
     </div>
 
+    <!-- Firebase v9+ Modular SDK -->
+    <script type="module">
+        // Import Firebase modules
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getFirestore, collection, addDoc, getDocs, query, where, updateDoc, deleteDoc, doc, setDoc, Timestamp, orderBy } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyD5ryTMGrud4Wec2cZkbovqMRRDB2fMKhk",
+            authDomain: "automated-attendence-465e2.firebaseapp.com",
+            projectId: "automated-attendence-465e2",
+            storageBucket: "automated-attendence-465e2.firebasestorage.app",
+            messagingSenderId: "790541780026",
+            appId: "1:790541780026:web:1614028c0706b6f9766103"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        
+        // Make Firebase available globally
+        window.firebaseApp = app;
+        window.firestoreDb = db;
+        window.firestoreModules = { collection, addDoc, getDocs, query, where, updateDoc, deleteDoc, doc, setDoc, Timestamp, orderBy };
+        
+        console.log('Firebase initialized successfully!');
+        
+        // Trigger app initialization after Firebase is ready
+        window.dispatchEvent(new Event('firebase-ready'));
+    </script>
+    
     <script>
         // Global variables
         let currentUser = null;
@@ -1084,6 +1115,9 @@
             maxFaceDistance: 0.6,
             duplicatePreventionTime: 300000 // 5 minutes in milliseconds
         };
+        let firebaseInitialized = false;
+        let db = null;
+        let firestoreModules = null;
         let currentStudentPhoto = null;
         let currentAttendancePhoto = null;
         
@@ -1099,12 +1133,25 @@
 
         // Initialize app
         document.addEventListener('DOMContentLoaded', function() {
+            // Wait for Firebase to initialize
+            if (window.firestoreDb) {
+                initializeApp();
+            } else {
+                window.addEventListener('firebase-ready', initializeApp);
+            }
+        });
+        
+        function initializeApp() {
+            db = window.firestoreDb;
+            firestoreModules = window.firestoreModules;
+            firebaseInitialized = true;
+            
+            console.log('App initializing with Firebase...');
+            
             loadData();
             updateTime();
             setInterval(updateTime, 1000);
             setInterval(updateAttendanceWindow, 30000);
-            updateDashboard();
-            updateAttendanceWindow();
             
             // Set default dates for reports
             const today = new Date().toISOString().split('T')[0];
@@ -1113,7 +1160,7 @@
             
             // Initialize canvas-based face recognition
             initializeFaceRecognition();
-        });
+        }
         
         // Initialize canvas-based face recognition system
         function initializeFaceRecognition() {
@@ -1260,51 +1307,258 @@
             }
         }
 
-        // Data management
-        function loadData() {
+        // Firebase Firestore Data Management
+        async function loadData() {
             try {
-                const savedStudents = getFromStorage('students');
-                const savedAttendance = getFromStorage('attendanceRecords');
-                const savedSettings = getFromStorage('settings');
+                console.log('Loading data from Firestore...');
                 
-                if (savedStudents) students = savedStudents;
-                if (savedAttendance) attendanceRecords = savedAttendance;
-                if (savedSettings) settings = { ...settings, ...savedSettings };
+                // Load students
+                await fetchAllStudents();
+                
+                // Load attendance records
+                await fetchAllAttendance();
+                
+                // Load settings
+                await fetchSettings();
+                
+                console.log('Data loaded successfully from Firestore');
+                updateDashboard();
+                updateAttendanceWindow();
+                loadStudentSelect();
+                
             } catch (error) {
-                console.error('Error loading data:', error);
+                console.error('Error loading data from Firestore:', error);
+                alert('Error loading data from Firebase. Please check your internet connection.');
             }
         }
 
-        function saveData() {
-            try {
-                setInStorage('students', students);
-                setInStorage('attendanceRecords', attendanceRecords);
-                setInStorage('settings', settings);
-            } catch (error) {
-                console.error('Error saving data:', error);
-            }
+        async function saveData() {
+            // Legacy function - now we save directly to Firestore in individual operations
+            console.log('Data auto-saved to Firestore');
+            return true;
         }
 
-        function getFromStorage(key) {
-            // Use only in-memory JavaScript variables - no external storage APIs
+        // Firestore: Save student
+        async function saveStudentToFirestore(student) {
             try {
-                if (!window.appMemoryStorage) window.appMemoryStorage = {};
-                return window.appMemoryStorage[key] || null;
-            } catch (error) {
-                console.error('Storage access error:', error);
-                return null;
-            }
-        }
-
-        function setInStorage(key, value) {
-            // Use only in-memory JavaScript variables - no external storage APIs
-            try {
-                if (!window.appMemoryStorage) window.appMemoryStorage = {};
-                window.appMemoryStorage[key] = JSON.parse(JSON.stringify(value));
+                const { collection, addDoc, doc, setDoc } = firestoreModules;
+                const studentsRef = collection(db, 'students');
+                
+                // Use student ID as document ID
+                const studentDoc = doc(db, 'students', student.id);
+                await setDoc(studentDoc, {
+                    studentId: student.id,
+                    name: student.name,
+                    class: student.class,
+                    rollNumber: student.rollNumber,
+                    faceData: student.faceData || [],
+                    photoUrl: student.photo || '',
+                    registered: true,
+                    registeredAt: firestoreModules.Timestamp.now(),
+                    createdAt: student.createdAt || new Date().toISOString()
+                });
+                
+                console.log('Student saved to Firestore:', student.id);
                 return true;
             } catch (error) {
-                console.error('Storage save error:', error);
-                return false;
+                console.error('Error saving student to Firestore:', error);
+                throw error;
+            }
+        }
+
+        // Firestore: Fetch all students
+        async function fetchAllStudents() {
+            try {
+                const { collection, getDocs } = firestoreModules;
+                const studentsRef = collection(db, 'students');
+                const snapshot = await getDocs(studentsRef);
+                
+                students = [];
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    students.push({
+                        id: data.studentId || doc.id,
+                        name: data.name,
+                        class: data.class,
+                        rollNumber: data.rollNumber,
+                        photo: data.photoUrl,
+                        faceData: data.faceData || [],
+                        registered: data.registered || true,
+                        createdAt: data.createdAt
+                    });
+                });
+                
+                console.log(`Loaded ${students.length} students from Firestore`);
+                loadStoredFaceData();
+                return students;
+            } catch (error) {
+                console.error('Error fetching students:', error);
+                return [];
+            }
+        }
+
+        // Firestore: Save attendance record
+        async function saveAttendanceToFirestore(record) {
+            try {
+                const { collection, addDoc } = firestoreModules;
+                const attendanceRef = collection(db, 'attendance');
+                
+                await addDoc(attendanceRef, {
+                    studentId: record.studentId,
+                    studentName: record.studentName,
+                    date: record.date,
+                    status: record.status,
+                    loginTime: record.time,
+                    logoutTime: record.logoutTime || '',
+                    photo: record.photo || '',
+                    confidence: record.confidence || 0,
+                    method: record.method || 'manual',
+                    timestamp: firestoreModules.Timestamp.now()
+                });
+                
+                console.log('Attendance saved to Firestore:', record.studentId);
+                return true;
+            } catch (error) {
+                console.error('Error saving attendance:', error);
+                throw error;
+            }
+        }
+
+        // Firestore: Fetch all attendance records
+        async function fetchAllAttendance() {
+            try {
+                const { collection, getDocs } = firestoreModules;
+                const attendanceRef = collection(db, 'attendance');
+                const snapshot = await getDocs(attendanceRef);
+                
+                attendanceRecords = [];
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    attendanceRecords.push({
+                        id: doc.id,
+                        studentId: data.studentId,
+                        studentName: data.studentName,
+                        date: data.date,
+                        status: data.status,
+                        time: data.loginTime || data.time,
+                        photo: data.photo || '',
+                        confidence: data.confidence || 0,
+                        method: data.method || 'manual',
+                        timestamp: data.timestamp
+                    });
+                });
+                
+                console.log(`Loaded ${attendanceRecords.length} attendance records from Firestore`);
+                return attendanceRecords;
+            } catch (error) {
+                console.error('Error fetching attendance:', error);
+                return [];
+            }
+        }
+
+        // Firestore: Fetch attendance by date range
+        async function fetchAttendanceByDate(fromDate, toDate) {
+            try {
+                const { collection, query, where, getDocs } = firestoreModules;
+                const attendanceRef = collection(db, 'attendance');
+                const q = query(
+                    attendanceRef,
+                    where('date', '>=', fromDate),
+                    where('date', '<=', toDate)
+                );
+                
+                const snapshot = await getDocs(q);
+                const records = [];
+                
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    records.push({
+                        id: doc.id,
+                        studentId: data.studentId,
+                        studentName: data.studentName,
+                        date: data.date,
+                        status: data.status,
+                        time: data.loginTime || data.time,
+                        photo: data.photo || '',
+                        confidence: data.confidence || 0,
+                        method: data.method || 'manual'
+                    });
+                });
+                
+                return records;
+            } catch (error) {
+                console.error('Error fetching attendance by date:', error);
+                return [];
+            }
+        }
+
+        // Firestore: Update settings
+        async function updateSettings(newSettings) {
+            try {
+                const { doc, setDoc } = firestoreModules;
+                
+                // Save each setting as a separate document
+                const settingsToSave = [
+                    { name: 'schoolName', value: newSettings.schoolName },
+                    { name: 'attendanceStartTime', value: newSettings.attendanceStartTime },
+                    { name: 'attendanceEndTime', value: newSettings.attendanceEndTime },
+                    { name: 'confidenceThreshold', value: newSettings.confidenceThreshold },
+                    { name: 'processEveryNthFrame', value: newSettings.processEveryNthFrame }
+                ];
+                
+                for (const setting of settingsToSave) {
+                    const settingDoc = doc(db, 'settings', setting.name);
+                    await setDoc(settingDoc, {
+                        settingName: setting.name,
+                        value: setting.value,
+                        updatedAt: firestoreModules.Timestamp.now()
+                    });
+                }
+                
+                console.log('Settings updated in Firestore');
+                return true;
+            } catch (error) {
+                console.error('Error updating settings:', error);
+                throw error;
+            }
+        }
+
+        // Firestore: Fetch settings
+        async function fetchSettings() {
+            try {
+                const { collection, getDocs } = firestoreModules;
+                const settingsRef = collection(db, 'settings');
+                const snapshot = await getDocs(settingsRef);
+                
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const settingName = data.settingName;
+                    const value = data.value;
+                    
+                    if (settings.hasOwnProperty(settingName)) {
+                        settings[settingName] = value;
+                    }
+                });
+                
+                console.log('Settings loaded from Firestore');
+                return settings;
+            } catch (error) {
+                console.error('Error fetching settings:', error);
+                return settings;
+            }
+        }
+
+        // Firestore: Delete student
+        async function deleteStudentFromFirestore(studentId) {
+            try {
+                const { doc, deleteDoc } = firestoreModules;
+                const studentDoc = doc(db, 'students', studentId);
+                await deleteDoc(studentDoc);
+                console.log('Student deleted from Firestore:', studentId);
+                return true;
+            } catch (error) {
+                console.error('Error deleting student:', error);
+                throw error;
             }
         }
 
@@ -1490,7 +1744,7 @@
             showAlert('studentAlert', 'Face data captured successfully! You can now save the student.', 'success');
         }
 
-        function saveStudent() {
+        async function saveStudent() {
             const id = document.getElementById('studentId').value.trim();
             const name = document.getElementById('studentName').value.trim();
             const studentClass = document.getElementById('studentClass').value.trim();
@@ -1521,25 +1775,32 @@
                 class: studentClass,
                 rollNumber,
                 photo: currentStudentPhoto,
-                faceData: faceDataArray, // Store all face data for better matching
+                faceData: faceDataArray,
                 registered: true,
                 createdAt: new Date().toISOString()
             };
             
-            students.push(student);
-            
-            // Store face data in memory for recognition
-            studentFaceData.set(id, faceDataArray);
-            
-            saveData();
-            
-            showAlert('studentAlert', 'Student saved successfully with face recognition data!', 'success');
-            setTimeout(() => {
-                cancelAddStudent();
-                loadStudentsList();
-                loadStudentSelect();
-                updateDashboard();
-            }, 1000);
+            try {
+                // Save to Firestore
+                await saveStudentToFirestore(student);
+                
+                // Add to local array
+                students.push(student);
+                
+                // Store face data in memory for recognition
+                studentFaceData.set(id, faceDataArray);
+                
+                showAlert('studentAlert', 'Student saved successfully to Firebase!', 'success');
+                setTimeout(() => {
+                    cancelAddStudent();
+                    loadStudentsList();
+                    loadStudentSelect();
+                    updateDashboard();
+                }, 1000);
+            } catch (error) {
+                console.error('Error saving student:', error);
+                showAlert('studentAlert', 'Error saving student to Firebase. Please try again.', 'error');
+            }
         }
         
         // Canvas-based face detection using pixel analysis
@@ -1733,13 +1994,20 @@
             alert('Edit functionality would be implemented here');
         }
 
-        function deleteStudent(id) {
+        async function deleteStudent(id) {
             if (confirm('Are you sure you want to delete this student?')) {
-                students = students.filter(s => s.id !== id);
-                saveData();
-                loadStudentsList();
-                loadStudentSelect();
-                updateDashboard();
+                try {
+                    await deleteStudentFromFirestore(id);
+                    students = students.filter(s => s.id !== id);
+                    studentFaceData.delete(id);
+                    loadStudentsList();
+                    loadStudentSelect();
+                    updateDashboard();
+                    alert('Student deleted successfully from Firebase!');
+                } catch (error) {
+                    console.error('Error deleting student:', error);
+                    alert('Error deleting student. Please try again.');
+                }
             }
         }
 
@@ -1837,7 +2105,7 @@
             markAttendance('Absent');
         }
 
-        function markAttendance(status) {
+        async function markAttendance(status) {
             try {
                 const selectedStudentId = document.getElementById('studentSelect').value;
                 if (!selectedStudentId) {
@@ -1873,34 +2141,29 @@
                 );
                 
                 if (existingRecord) {
-                    if (!confirm('Attendance already marked for this student today. Update?')) {
-                        return;
-                    }
-                    existingRecord.status = status;
-                    existingRecord.time = now.toLocaleTimeString();
-                    existingRecord.photo = currentAttendancePhoto;
-                    existingRecord.method = 'manual_override';
-                } else {
-                    const record = {
-                        id: Date.now().toString(),
-                        studentId: selectedStudentId,
-                        studentName: student.name,
-                        date: today,
-                        status,
-                        time: now.toLocaleTimeString(),
-                        photo: currentAttendancePhoto,
-                        timestamp: now.toISOString(),
-                        method: 'manual'
-                    };
-                    attendanceRecords.push(record);
-                }
-                
-                if (!saveData()) {
-                    alert('Error saving data. Please try again.');
+                    alert('Attendance already marked for this student today. Cannot update from manual entry.');
                     return;
                 }
                 
-                alert(`Attendance marked as ${status} for ${student.name}`);
+                const record = {
+                    id: Date.now().toString(),
+                    studentId: selectedStudentId,
+                    studentName: student.name,
+                    date: today,
+                    status,
+                    time: now.toLocaleTimeString(),
+                    photo: currentAttendancePhoto,
+                    timestamp: now.toISOString(),
+                    method: 'manual'
+                };
+                
+                // Save to Firestore
+                await saveAttendanceToFirestore(record);
+                
+                // Add to local array
+                attendanceRecords.push(record);
+                
+                alert(`Attendance marked as ${status} for ${student.name} - Saved to Firebase!`);
                 
                 // Reset form
                 const studentSelect = document.getElementById('studentSelect');
@@ -1916,7 +2179,7 @@
                 
             } catch (error) {
                 console.error('Error marking attendance:', error);
-                alert('Error marking attendance. Please try again.');
+                alert('Error marking attendance in Firebase. Please try again.');
             }
         }
 
@@ -1980,23 +2243,33 @@
             document.getElementById('attendanceEndTime').value = settings.attendanceEndTime;
         }
 
-        function saveSchoolSettings() {
+        async function saveSchoolSettings() {
             settings.schoolName = document.getElementById('schoolName').value;
-            saveData();
-            alert('School settings saved successfully!');
+            try {
+                await updateSettings(settings);
+                alert('School settings saved successfully to Firebase!');
+            } catch (error) {
+                console.error('Error saving settings:', error);
+                alert('Error saving settings. Please try again.');
+            }
         }
 
-        function saveTimeSettings() {
+        async function saveTimeSettings() {
             settings.attendanceStartTime = document.getElementById('attendanceStartTime').value;
             settings.attendanceEndTime = document.getElementById('attendanceEndTime').value;
-            saveData();
-            updateAttendanceWindow();
-            updateAttendancePageWindow();
-            alert('Time settings saved successfully!');
+            try {
+                await updateSettings(settings);
+                updateAttendanceWindow();
+                updateAttendancePageWindow();
+                alert('Time settings saved successfully to Firebase!');
+            } catch (error) {
+                console.error('Error saving settings:', error);
+                alert('Error saving settings. Please try again.');
+            }
         }
 
         // Reports and export
-        function generateReport() {
+        async function generateReport() {
             const fromDate = document.getElementById('fromDate').value;
             const toDate = document.getElementById('toDate').value;
             
@@ -2005,11 +2278,14 @@
                 return;
             }
             
-            const filteredRecords = attendanceRecords.filter(record => {
-                return record.date >= fromDate && record.date <= toDate;
-            });
-            
-            displayReport(filteredRecords, fromDate, toDate);
+            try {
+                // Fetch fresh data from Firestore for the date range
+                const filteredRecords = await fetchAttendanceByDate(fromDate, toDate);
+                displayReport(filteredRecords, fromDate, toDate);
+            } catch (error) {
+                console.error('Error generating report:', error);
+                alert('Error generating report. Please try again.');
+            }
         }
 
         function displayReport(records, fromDate, toDate) {
@@ -2200,32 +2476,8 @@
             reader.readAsText(file);
         }
 
-        function clearAllData() {
-            if (confirm('This will delete ALL data including students and attendance records. This cannot be undone. Are you sure?')) {
-                if (confirm('Really sure? This action is permanent!')) {
-                    students = [];
-                    attendanceRecords = [];
-                    settings = {
-                        schoolName: 'Government Primary School Rampur',
-                        attendanceStartTime: '09:00',
-                        attendanceEndTime: '09:30',
-                        schoolStartTime: '09:00',
-                        schoolEndTime: '15:30'
-                    };
-                    
-                    // Clear storage
-                    if (window.memoryStorage) {
-                        window.memoryStorage = {};
-                    }
-                    
-                    updateDashboard();
-                    loadStudentsList();
-                    loadStudentSelect();
-                    loadSettings();
-                    
-                    alert('All data cleared successfully!');
-                }
-            }
+        async function clearAllData() {
+            alert('Data clearing from Firebase is disabled for safety. Please use Firebase Console to delete collections if needed.');
         }
 
         // Utility functions
@@ -2444,7 +2696,7 @@
             }
         }
         
-        function markAttendanceAutomatically(student, confidence, photo) {
+        async function markAttendanceAutomatically(student, confidence, photo) {
             try {
                 const today = new Date().toISOString().split('T')[0];
                 const now = new Date();
@@ -2473,8 +2725,11 @@
                     method: 'auto_face_recognition'
                 };
                 
+                // Save to Firestore
+                await saveAttendanceToFirestore(record);
+                
+                // Add to local array
                 attendanceRecords.push(record);
-                saveData();
                 
                 // Show success notification
                 showAttendanceSuccess(student.name, confidence);
@@ -2483,11 +2738,11 @@
                 loadTodayAttendance();
                 updateDashboard();
                 
-                addToRecognitionLog(`✓ ${student.name} marked present (${Math.round(confidence * 100)}%)`, 'success');
+                addToRecognitionLog(`✓ ${student.name} marked present (${Math.round(confidence * 100)}%) - Saved to Firebase`, 'success');
                 
             } catch (error) {
                 console.error('Error marking automatic attendance:', error);
-                addToRecognitionLog('⚠ Error marking attendance', 'error');
+                addToRecognitionLog('⚠ Error saving to Firebase', 'error');
             }
         }
         
